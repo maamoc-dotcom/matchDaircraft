@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Aircraft Scanner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; background-color: #000; overflow: hidden; }
+        .viewfinder-container { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            display: flex; align-items: center; justify-content: center; 
+            pointer-events: none; z-index: 10; 
+        }
+        .viewfinder-png { width: 100%; height: 100%; object-fit: cover; opacity: 1; }
+    </style>
+</head>
+<body>
+
+<div class="relative w-full h-full flex flex-col justify-center items-center">
+    
+    <!-- วิดีโอกล้องสดแบบ Real-time -->
+    <video id="camera-stream" autoplay playsinline class="absolute top-0 left-0 w-full h-full object-cover"></video>
+    
+    <!-- Live Overlay แสดงทับบนกล้องสด -->
+    <div class="viewfinder-container">
+        <img src="https://res.cloudinary.com/dzgov6mcu/image/upload/f_auto/q_auto/overlay.001_xlufog.png" class="viewfinder-png" alt="Overlay">
+    </div>
+
+    <!-- ปุ่มและป้ายผลลัพธ์ -->
+    <div class="absolute bottom-10 z-20 w-full px-5 flex flex-col gap-3">
+        <div id="status-box" class="hidden text-center text-xl font-bold py-3 rounded-lg text-white shadow-xl"></div>
+        <button id="action-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg text-xl">
+            📷 กดเพื่อสแกนภาพ
+        </button>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('camera-stream');
+    const actionBtn = document.getElementById('action-btn');
+    const statusBox = document.getElementById('status-box');
+    
+    // ใส่ URL Google Apps Script ที่ Deploy แบบ Anyone ไว้สำหรับดึงฐานข้อมูล MSN
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbxY_BdHfFU6IhDgHD1cI01e9AAGNY25BWbA4XfPq7hUM_A8xAxlBd8hTHnXv7sMHkfnbA/exec";
+    
+    let aircraftDB = {};
+    let isProcessing = false;
+
+    // ดึงฐานข้อมูล
+    fetch(GAS_URL)
+        .then(res => res.json())
+        .then(data => { aircraftDB = data; })
+        .catch(err => console.log("DB Load Error:", err));
+
+    // เปิดกล้องสดทันที
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } })
+        .then(stream => { video.srcObject = stream; })
+        .catch(err => alert("ไม่สามารถเปิดกล้องได้: " + err));
+
+    actionBtn.addEventListener('click', async () => {
+        if (isProcessing) {
+            video.play();
+            statusBox.classList.add('hidden');
+            actionBtn.innerHTML = "📷 กดเพื่อสแกนภาพ";
+            actionBtn.classList.replace('bg-gray-500', 'bg-blue-600');
+            isProcessing = false;
+            return;
+        }
+
+        isProcessing = true;
+        video.pause();
+        actionBtn.innerHTML = "⏳ กำลังประมวลผล...";
+        actionBtn.classList.replace('bg-blue-600', 'bg-gray-500');
+
+        // แคปภาพจากวิดีโอ
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth; 
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+
+        try {
+            const worker = await Tesseract.createWorker("eng");
+            const result = await worker.recognize(canvas.toDataURL('image/jpeg'));
+            await worker.terminate();
+
+            const rawText = result.data.text;
+            // ลบเว้นวรรค ขีดกลาง และแปลงตัวอักษรที่ OCR มักอ่านผิด (เช่น O เป็น 0 หรือ D เป็น 0)
+            const cleanText = rawText.replace(/[-\s]/g, "").toUpperCase();
+            
+            // ค้นหาแพทเทิร์นทะเบียน 9M
+            const regMatches = cleanText.match(/9M[A-Z0-9]{3}/g) || [];
+            
+            let matched = false;
+            if (regMatches.length >= 2) {
+                matched = true;
+            } else if (regMatches.length === 1) {
+                let foundReg = regMatches[0];
+                let expectedMSN = aircraftDB[foundReg];
+                if (expectedMSN && cleanText.includes(expectedMSN)) {
+                    matched = true;
+                }
+            }
+
+            statusBox.classList.remove('hidden');
+            if (matched) {
+                statusBox.innerHTML = "✅ ถูกต้อง! MATCHED";
+                statusBox.className = "text-center text-2xl font-bold py-4 rounded-lg text-white bg-green-500 shadow-xl";
+            } else {
+                statusBox.innerHTML = "❌ ไม่ตรงกัน กรุณาตรวจสอบ";
+                statusBox.className = "text-center text-2xl font-bold py-4 rounded-lg text-white bg-red-600 shadow-xl";
+            }
+
+        } catch (error) {
+            statusBox.innerHTML = "เกิดข้อผิดพลาดในการสแกน";
+            statusBox.classList.remove('hidden');
+            statusBox.className = "text-center text-2xl font-bold py-4 rounded-lg text-white bg-orange-500 shadow-xl";
+        }
+
+        actionBtn.innerHTML = "🔄 ถ่ายใหม่อีกครั้ง";
+    });
+</script>
+</body>
+</html>
