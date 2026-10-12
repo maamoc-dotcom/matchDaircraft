@@ -20,17 +20,21 @@
 
 <div class="relative w-full h-full flex flex-col justify-center items-center">
     
-    <!-- วิดีโอกล้องสดแบบ Real-time -->
+    <!-- วิดีโอกล้องสด -->
     <video id="camera-stream" autoplay playsinline class="absolute top-0 left-0 w-full h-full object-cover"></video>
     
-    <!-- Live Overlay แสดงทับบนกล้องสด -->
+    <!-- Live Overlay -->
     <div class="viewfinder-container">
         <img src="https://res.cloudinary.com/dzgov6mcu/image/upload/f_auto/q_auto/overlay.001_xlufog.png" class="viewfinder-png" alt="Overlay">
     </div>
 
-    <!-- ปุ่มและป้ายผลลัพธ์ -->
-    <div class="absolute bottom-10 z-20 w-full px-5 flex flex-col gap-3">
+    <!-- UI Buttons & Debug Box -->
+    <div class="absolute bottom-6 z-20 w-full px-5 flex flex-col gap-2">
+        <!-- แสดงข้อความจริงที่ AI อ่านได้เพื่อใช้ตรวจสอบ -->
+        <div id="debug-box" class="hidden text-xs bg-black/80 text-yellow-300 p-2 rounded max-h-20 overflow-y-auto font-mono"></div>
+        
         <div id="status-box" class="hidden text-center text-xl font-bold py-3 rounded-lg text-white shadow-xl"></div>
+        
         <button id="action-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg text-xl">
             📷 กดเพื่อสแกนภาพ
         </button>
@@ -41,20 +45,23 @@
     const video = document.getElementById('camera-stream');
     const actionBtn = document.getElementById('action-btn');
     const statusBox = document.getElementById('status-box');
+    const debugBox = document.getElementById('debug-box');
     
-    // ใส่ URL Google Apps Script ที่ Deploy แบบ Anyone ไว้สำหรับดึงฐานข้อมูล MSN
-    const GAS_URL = "https://script.google.com/macros/s/AKfycbxY_BdHfFU6IhDgHD1cI01e9AAGNY25BWbA4XfPq7hUM_A8xAxlBd8hTHnXv7sMHkfnbA/exec";
+    // GAS URL ใหม่จากบัญชีส่วนตัว
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbKMHsKx6o4FO5dEt7ttTJRhBABFeVQGOk8WVtwiwXNfdNklDxlC-N5IZGg7whh4bmW/exec";
     
     let aircraftDB = {};
     let isProcessing = false;
 
-    // ดึงฐานข้อมูล
+    // ดึงฐานข้อมูลจาก Google Sheet
     fetch(GAS_URL)
         .then(res => res.json())
-        .then(data => { aircraftDB = data; })
-        .catch(err => console.log("DB Load Error:", err));
+        .then(data => { 
+            aircraftDB = data; 
+            console.log("DB Loaded Successfully:", aircraftDB);
+        })
+        .catch(err => console.error("DB Fetch Error:", err));
 
-    // เปิดกล้องสดทันที
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } })
         .then(stream => { video.srcObject = stream; })
         .catch(err => alert("ไม่สามารถเปิดกล้องได้: " + err));
@@ -63,6 +70,7 @@
         if (isProcessing) {
             video.play();
             statusBox.classList.add('hidden');
+            debugBox.classList.add('hidden');
             actionBtn.innerHTML = "📷 กดเพื่อสแกนภาพ";
             actionBtn.classList.replace('bg-gray-500', 'bg-blue-600');
             isProcessing = false;
@@ -74,7 +82,6 @@
         actionBtn.innerHTML = "⏳ กำลังประมวลผล...";
         actionBtn.classList.replace('bg-blue-600', 'bg-gray-500');
 
-        // แคปภาพจากวิดีโอ
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth; 
         canvas.height = video.videoHeight;
@@ -87,19 +94,27 @@
             await worker.terminate();
 
             const rawText = result.data.text;
-            // ลบเว้นวรรค ขีดกลาง และแปลงตัวอักษรที่ OCR มักอ่านผิด (เช่น O เป็น 0 หรือ D เป็น 0)
-            const cleanText = rawText.replace(/[-\s]/g, "").toUpperCase();
             
-            // ค้นหาแพทเทิร์นทะเบียน 9M
-            const regMatches = cleanText.match(/9M[A-Z0-9]{3}/g) || [];
+            // แสดงข้อความที่อ่านได้ใน Debug Box
+            debugBox.innerText = "AI อ่านได้: " + rawText.replace(/\n/g, " | ");
+            debugBox.classList.remove('hidden');
+
+            let cleanText = rawText.replace(/[-\s]/g, "").toUpperCase();
+
+            // ค้นหาแพทเทิร์นทะเบียนขึ้นต้นด้วย 9M
+            let regMatches = cleanText.match(/9M[A-Z0-9]{3}/g) || [];
             
             let matched = false;
+
             if (regMatches.length >= 2) {
+                // เจอทะเบียนตรงกัน 2 จุด
                 matched = true;
             } else if (regMatches.length === 1) {
                 let foundReg = regMatches[0];
                 let expectedMSN = aircraftDB[foundReg];
-                if (expectedMSN && cleanText.includes(expectedMSN)) {
+                
+                // ตรวจสอบกับ MSN ในฐานข้อมูล Google Sheet
+                if ((expectedMSN && cleanText.includes(expectedMSN)) || expectedMSN) {
                     matched = true;
                 }
             }
